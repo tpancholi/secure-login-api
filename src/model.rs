@@ -30,11 +30,14 @@ impl Users {
 }
 
 #[derive(Insertable, Deserialize)]
-#[diesel(table_name = "users")]
+#[diesel(table_name = crate::schema::users)]
 pub struct NewUser {
     pub customer_name: String,
     pub email: String,
-    pub password_hash: String,
+    #[serde(rename = "password")]
+    pub password: String, // This is the plaintext password from JSON
+    #[serde(skip)]
+    pub password_hash: String, // This will be set by the DBService after hashing
 }
 
 #[derive(Deserialize)]
