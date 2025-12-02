@@ -2,25 +2,24 @@ use crate::model::{Login, NewUser, Users};
 use crate::schema;
 use crate::schema::users::dsl::users;
 use crate::schema::users::{email, id, password_hash};
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use diesel::r2d2::ConnectionManager;
 use diesel::result::{DatabaseErrorKind, Error};
 use diesel::{PgConnection, QueryDsl, RunQueryDsl};
 use dotenv::dotenv;
-use std::env;
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use argon2::password_hash::SaltString;
 use log::{error, info};
 use once_cell::sync::Lazy;
-use regex::Regex;
-use uuid::Uuid;
 use rand_core::OsRng;
+use regex::Regex;
+use std::env;
+use uuid::Uuid;
 
 pub type DBPool = r2d2::Pool<ConnectionManager<PgConnection>>;
 
 // Static regex for email validation
-static EMAIL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap()
-});
+static EMAIL_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap());
 
 #[derive(Clone)]
 pub struct DBService {
@@ -52,17 +51,17 @@ impl DBService {
         self.validate_password(&new_user.password)?;
 
         // Hash the password using Argon2
-        let hashed_password = self.hash_password(&new_user.password)
+        let hashed_password = self
+            .hash_password(&new_user.password)
             .map_err(|_| UserCreationError::PasswordHashingFailed)?;
 
         new_user.password_hash = hashed_password;
 
         // Get connection from pool with proper error handling
-        let mut conn = self.pool.get()
-            .map_err(|e| {
-                error!("Failed to get database connection: {}", e);
-                UserCreationError::DatabaseConnectionFailed
-            })?;
+        let mut conn = self.pool.get().map_err(|e| {
+            error!("Failed to get database connection: {}", e);
+            UserCreationError::DatabaseConnectionFailed
+        })?;
 
         diesel::insert_into(schema::users::table)
             .values(&new_user)
@@ -103,7 +102,8 @@ impl DBService {
             return Err(UserCreationError::InvalidEmail);
         }
 
-        if email_str.len() > 255 { // Use the parameter name
+        if email_str.len() > 255 {
+            // Use the parameter name
             return Err(UserCreationError::EmailTooLong);
         }
 
@@ -126,7 +126,9 @@ impl DBService {
     /// Validates password strength
     fn validate_password(&self, password: &str) -> Result<(), UserCreationError> {
         if password.len() < 8 {
-            return Err(UserCreationError::WeakPassword("Password must be at least 8 characters long".to_string()));
+            return Err(UserCreationError::WeakPassword(
+                "Password must be at least 8 characters long".to_string(),
+            ));
         }
 
         let has_uppercase = password.chars().any(|c| c.is_uppercase());
@@ -136,7 +138,8 @@ impl DBService {
 
         if !(has_uppercase && has_lowercase && has_digit && has_special) {
             return Err(UserCreationError::WeakPassword(
-                "Password must contain uppercase, lowercase, numbers, and special characters".to_string()
+                "Password must contain uppercase, lowercase, numbers, and special characters"
+                    .to_string(),
             ));
         }
 
@@ -153,7 +156,10 @@ impl DBService {
         let parsed_hash = PasswordHash::new(&user.password_hash).ok()?;
         let argon2 = Argon2::default();
 
-        if argon2.verify_password(login.password.as_bytes(), &parsed_hash).is_ok() {
+        if argon2
+            .verify_password(login.password.as_bytes(), &parsed_hash)
+            .is_ok()
+        {
             Some(user)
         } else {
             None
@@ -162,10 +168,7 @@ impl DBService {
 
     pub fn get_user_by_id(&self, user_id: Uuid) -> Option<Users> {
         let mut conn = self.pool.get().ok()?;
-        users
-            .filter(id.eq(user_id))
-            .first::<Users>(&mut conn)
-            .ok()
+        users.filter(id.eq(user_id)).first::<Users>(&mut conn).ok()
     }
 }
 
