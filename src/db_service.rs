@@ -1,4 +1,5 @@
 use crate::model::{Login, NewUser, Users};
+use crate::password_helper::{PasswordConfig, PasswordError, PasswordService};
 use crate::schema;
 use crate::schema::users::dsl::users;
 use crate::schema::users::{email, id, password_hash};
@@ -24,6 +25,7 @@ static EMAIL_REGEX: Lazy<Regex> =
 #[derive(Clone)]
 pub struct DBService {
     pool: DBPool,
+    password_service: PasswordService,
 }
 
 impl DBService {
@@ -34,24 +36,51 @@ impl DBService {
 
         let manager = ConnectionManager::<PgConnection>::new(db_url);
 
-        let result = r2d2::Pool::builder()
+        let pool = r2d2::Pool::builder()
             .build(manager)
             .expect("Failed to initialize db pool.");
-        DBService { pool: result }
+
+        // Configure password service (could load from env vars)
+        let password_config = PasswordConfig {
+            min_length: 8,
+            require_uppercase: true,
+            require_lowercase: true,
+            require_digits: true,
+            require_special: true,
+        };
+        let password_service = PasswordService::new(password_config);
+
+        DBService {
+            pool,
+            password_service,
+        }
     }
 
     pub fn create_user(&self, mut new_user: NewUser) -> Result<Uuid, UserCreationError> {
+        let normalized_email = new_user.email.trim().to_lowercase();
         // Validate email format
-        self.validate_email(&new_user.email)?;
+        self.validate_email(&normalized_email)?;
+        new_user.email = normalized_email;
+
+        let normalized_name = new_user.customer_name.trim().to_string();
+
+        if normalized_name.is_empty() {
+            return Err(UserCreationError::InvalidCustomerName);
+        }
 
         // Validate customer name
-        self.validate_customer_name(&new_user.customer_name)?;
+        self.validate_customer_name(&normalized_name)?;
+
+        new_user.customer_name = normalized_name;
 
         // Validate password strength
-        self.validate_password(&new_user.password)?;
+        self.password_service
+            .validate_password_strength(&new_user.password)
+            .map_err(|errors| UserCreationError::WeakPassword(errors.join(", ")))?;
 
-        // Hash the password using Argon2
+        // Use password service for hashing
         let hashed_password = self
+            .password_service
             .hash_password(&new_user.password)
             .map_err(|_| UserCreationError::PasswordHashingFailed)?;
 
@@ -65,7 +94,7 @@ impl DBService {
 
         diesel::insert_into(schema::users::table)
             .values(&new_user)
-            .returning(schema::users::id)
+            .returning(id)
             .get_result::<Uuid>(&mut conn)
             .map_err(|e| {
                 error!("Failed to insert user: {}", e);
@@ -86,23 +115,17 @@ impl DBService {
             })
     }
 
-    /// Hashes a password using Argon2
-    fn hash_password(&self, password: &str) -> Result<String, Box<dyn error::Error>> {
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        match argon2.hash_password(password.as_bytes(), &salt) {
-            Ok(hash) => Ok(hash.to_string()),
-            Err(e) => Err(Box::new(e)),
-        }
-    }
-
     /// Validates email format
     fn validate_email(&self, email_str: &str) -> Result<(), UserCreationError> {
-        if !EMAIL_REGEX.is_match(email_str) {
+        let trimmed_email = email_str.trim();
+        if trimmed_email.is_empty() {
+            return Err(UserCreationError::InvalidEmail);
+        }
+        if !EMAIL_REGEX.is_match(trimmed_email) {
             return Err(UserCreationError::InvalidEmail);
         }
 
-        if email_str.len() > 255 {
+        if trimmed_email.len() > 255 {
             // Use the parameter name
             return Err(UserCreationError::EmailTooLong);
         }
@@ -123,29 +146,6 @@ impl DBService {
         Ok(())
     }
 
-    /// Validates password strength
-    fn validate_password(&self, password: &str) -> Result<(), UserCreationError> {
-        if password.len() < 8 {
-            return Err(UserCreationError::WeakPassword(
-                "Password must be at least 8 characters long".to_string(),
-            ));
-        }
-
-        let has_uppercase = password.chars().any(|c| c.is_uppercase());
-        let has_lowercase = password.chars().any(|c| c.is_lowercase());
-        let has_digit = password.chars().any(|c| c.is_numeric());
-        let has_special = password.chars().any(|c| !c.is_alphanumeric());
-
-        if !(has_uppercase && has_lowercase && has_digit && has_special) {
-            return Err(UserCreationError::WeakPassword(
-                "Password must contain uppercase, lowercase, numbers, and special characters"
-                    .to_string(),
-            ));
-        }
-
-        Ok(())
-    }
-
     pub fn login(&self, login: Login) -> Option<Users> {
         let mut conn = self.pool.get().ok()?;
         let user = users
@@ -153,16 +153,13 @@ impl DBService {
             .first::<Users>(&mut conn)
             .ok()?;
 
-        let parsed_hash = PasswordHash::new(&user.password_hash).ok()?;
-        let argon2 = Argon2::default();
-
-        if argon2
-            .verify_password(login.password.as_bytes(), &parsed_hash)
-            .is_ok()
+        // Use password service for verification
+        match self
+            .password_service
+            .verify_password(&login.password, &user.password_hash)
         {
-            Some(user)
-        } else {
-            None
+            Ok(true) => Some(user),
+            _ => None,
         }
     }
 
