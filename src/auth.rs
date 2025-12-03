@@ -1,6 +1,7 @@
 use chrono::{Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, TokenData, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
+use std::env;
 use uuid::Uuid;
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -43,6 +44,22 @@ impl JwtConfig {
             expiration_hours,
             leeway_seconds: 30,
         }
+    }
+
+    pub fn from_env() -> Result<Self, String> {
+        dotenv::dotenv().ok();
+        let secret = env::var("JWT_SECRET")
+            .map_err(|_| "JWT_SECRET environment variable not set".to_string())?;
+
+        if secret.len() < 32 {
+            return Err("JWT_SECRET must be at least 32 characters long".to_string());
+        }
+
+        let expiration_hours: i64 = env::var("JWT_EXPIRATION_HOURS")
+            .unwrap_or_else(|_| "24".to_string())
+            .parse()
+            .map_err(|_| "JWT_EXPIRATION_HOURS must be a valid integer".to_string())?;
+        Ok(Self::new(secret, expiration_hours))
     }
 }
 

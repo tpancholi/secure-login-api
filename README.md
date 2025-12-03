@@ -22,6 +22,11 @@
 - PostgreSQL (18.1)
 - PgAdmin4 (9.10.0)
 
+## Generate Secure JWT Token
+```bash
+bun -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
 ### To access pgAdmin4
 - Go to `http://localhost:5050`
 - Username: `admin@example.com` # from docker-compose.yml
