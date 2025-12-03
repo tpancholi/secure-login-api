@@ -4,6 +4,7 @@ use crate::model::{Login, NewUser};
 use actix_web::cookie::time::Duration;
 use actix_web::cookie::{Cookie, SameSite};
 use actix_web::{HttpRequest, HttpResponse, post, web};
+use log::error;
 
 #[post("/register")]
 pub async fn register_user(db: web::Data<DBService>, user: web::Json<NewUser>) -> HttpResponse {
@@ -11,7 +12,7 @@ pub async fn register_user(db: web::Data<DBService>, user: web::Json<NewUser>) -
     match db.create_user(data).await {
         Ok(_) => HttpResponse::Ok().body("Success"),
         Err(_) => {
-            eprintln!("Error creating user");
+            error!("Error creating user");
             HttpResponse::InternalServerError().body("Error creating user")
         }
     }
